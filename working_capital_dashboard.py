@@ -19,58 +19,110 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 # 1. CARGA DE DATOS (BLINDADA)
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 1. CARGA DE DATOS (BLINDADA V2 - SMART SEARCH)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 1. CARGA DE DATOS (BLINDADA V3 - ANTI-DUPLICADOS)
+# -----------------------------------------------------------------------------
 def load_data(uploaded_file):
     try:
+        # A. LEER EL ARCHIVO SIN CABECERAS PARA BUSCAR DÓNDE EMPIEZA
         if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
+            df_temp = pd.read_csv(uploaded_file, header=None)
         else:
-            df = pd.read_excel(uploaded_file, header=0)
-            if str(df.columns[0]).startswith('Unnamed') or isinstance(df.columns[0], int):
-                for i in range(1, 10):
-                    try:
-                        temp_df = pd.read_excel(uploaded_file, header=i)
-                        if not str(temp_df.columns[0]).startswith('Unnamed'):
-                            df = temp_df
-                            break
-                    except: pass
+            df_temp = pd.read_excel(uploaded_file, header=None)
 
-        df.columns = df.columns.astype(str).str.lower().str.strip().str.replace(' ', '_').str.replace('.', '')
+        # B. BUSCADOR INTELIGENTE DE CABECERA
+        header_row = 0
+        keywords = ['ventas', 'clientes', 'coste', 'ingresos', 'fecha', 'periodo']
+        
+        # Escaneamos las primeras 10 filas
+        for i, row in df_temp.head(10).iterrows():
+            # Convertimos la fila a una lista de textos simples para buscar
+            row_text = [str(val).lower() for val in row.values]
+            matches = sum(1 for x in row_text if any(k in x for k in keywords))
+            if matches >= 2:
+                header_row = i
+                break
+        
+        # C. RECARGAR CON LA CABECERA CORRECTA
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file, header=header_row)
+        else:
+            df = pd.read_excel(uploaded_file, header=header_row)
+
+        # --- CORRECCIÓN DEL ERROR: ELIMINAR DUPLICADOS ---
+        # Si hay dos columnas con el mismo nombre, nos quedamos solo con la primera
         df = df.loc[:, ~df.columns.duplicated()]
+        
+        # D. NORMALIZACIÓN DE NOMBRES (LIST COMPREHENSION - MÁS SEGURO)
+        # Esto evita el error de .str en índices raros
+        df.columns = [str(c).lower().strip().replace(' ', '_').replace('.', '') for c in df.columns]
 
+        # Mapa de renombramiento
         rename_map = {
             'date': 'fecha', 'periodo': 'fecha', 'mes': 'fecha',
             'ventas': 'ventas_netas', 'ingresos': 'ventas_netas', 'facturacion': 'ventas_netas',
-            'costos': 'coste_ventas', 'coste': 'coste_ventas', 'cogs': 'coste_ventas',
+            'coste': 'coste_ventas', 'costos': 'coste_ventas', 'coste_ventas': 'coste_ventas', 'compras': 'coste_ventas',
             'clientes': 'cuentas_por_cobrar', 'deudores': 'cuentas_por_cobrar', 'cxc': 'cuentas_por_cobrar',
             'existencias': 'inventario', 'stock': 'inventario', 'inventarios': 'inventario',
             'proveedores': 'cuentas_por_pagar', 'acreedores': 'cuentas_por_pagar', 'cxp': 'cuentas_por_pagar'
         }
-        df.rename(columns=rename_map, inplace=True)
+        
+        new_columns = {}
+        for col in df.columns:
+            for key, val in rename_map.items():
+                if key == col: 
+                    new_columns[col] = val
+                    break
+        df.rename(columns=new_columns, inplace=True)
+        
+        # Volvemos a eliminar duplicados por si el renombre creó alguno nuevo
         df = df.loc[:, ~df.columns.duplicated()]
 
+        # E. TRATAMIENTO DE FECHAS
         if 'fecha' not in df.columns:
             df.rename(columns={df.columns[0]: 'fecha'}, inplace=True)
+            
         df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
-        if df['fecha'].isna().all():
-             df['fecha'] = pd.date_range(start='2024-01-01', periods=len(df), freq='ME')
+        if df['fecha'].isna().all() or df['fecha'].isnull().sum() > len(df) * 0.5:
+             dates = pd.date_range(start='2024-01-01', periods=len(df), freq='ME')
+             df['fecha'] = dates
 
+        # F. LIMPIEZA NUMÉRICA (PROTEGIDA)
         cols_necesarias = ['ventas_netas', 'coste_ventas', 'cuentas_por_cobrar', 'inventario', 'cuentas_por_pagar']
+        
         for col in cols_necesarias:
             if col not in df.columns:
-                df[col] = 0
+                df[col] = 0.0 
             else:
-                df[col] = df[col].astype(str).str.replace(r'[$,€A-Za-z]', '', regex=True).str.replace(',', '')
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        if 'compras' in df.columns:
-            df['compras'] = df['compras'].astype(str).str.replace(r'[$,€A-Za-z]', '', regex=True).str.replace(',', '')
-            df['compras'] = pd.to_numeric(df['compras'], errors='coerce').fillna(0)
-            
-        return df
-    except Exception as e:
-        st.error(f"Error procesando archivo: {e}")
-        return None
+                # Nos aseguramos de que sea una SERIE y no un DataFrame
+                if isinstance(df[col], pd.DataFrame):
+                    series = df[col].iloc[:, 0].astype(str) # Si sigue habiendo duplicados, coge el primero
+                else:
+                    series = df[col].astype(str)
+                
+                # Limpieza de caracteres
+                series = series.str.replace(r'[€$a-zA-Z]', '', regex=True).str.strip()
+                
+                # Lógica Europea (1.000,00 -> 1000.00)
+                # Si detectamos coma, asumimos que es decimal
+                if series.str.contains(',', regex=False).any():
+                    series = series.str.replace('.', '', regex=False) # Fuera punto de miles
+                    series = series.str.replace(',', '.', regex=False) # Coma a punto
+                
+                df[col] = pd.to_numeric(series, errors='coerce').fillna(0.0)
 
+        # DEBUG VISUAL
+        with st.expander("✅ DATOS CARGADOS CORRECTAMENTE (CLICK PARA VER)", expanded=False):
+            st.dataframe(df.head())
+
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Error crítico cargando datos: {e}")
+        return None
 # -----------------------------------------------------------------------------
 # 2. GENERADOR DE DATOS (Simulación)
 # -----------------------------------------------------------------------------
