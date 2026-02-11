@@ -181,6 +181,46 @@ def calculate_financials(df, target_dso, target_dio, target_dpo):
     return df
 
 # -----------------------------------------------------------------------------
+# 4. LÓGICA DE INTERPRETACIÓN AVANZADA
+# -----------------------------------------------------------------------------
+def analyze_ccc_health(df, industry_type='manufacturing'):
+    """
+    Analiza la salud del Ciclo de Caja con reglas de negocio expertas (V3.0 - CFO Level).
+    Devuelve una lista de alertas y el impacto económico (Cash Unlocked).
+    """
+    current = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) > 1 else current
+    avg = df.tail(12).mean(numeric_only=True)
+    
+    alerts = []
+    
+    # R1: CCC Negativo (Check de Industria)
+    # Si es retail, CCC negativo es bueno (Amazon model), si es manufacturing, es riesgo.
+    if current['ccc'] < 0 and industry_type != 'retail':
+        alerts.append("🔴 **ALERTA CRÍTICA**: CCC Negativo en sector no-retail. Verificar si es eficiencia o incapacidad de pago (DPO forzado).")
+        
+    # R2: Mejora de CCC "mala" (por rotura de stock crítica)
+    # Si el CCC baja (mejora) PERO el inventario cae drásticamente, es peligroso.
+    delta_ccc = prev['ccc'] - current['ccc'] # Positivo = Mejora (menos días)
+    inventory_drop = (current['inventario'] - prev['inventario']) / prev['inventario'] if prev['inventario'] > 0 else 0
+    
+    if delta_ccc > 5 and inventory_drop < -0.15: # Mejora de 5 días pero caída de 15% stock
+        alerts.append(f"🟠 **ALERTA OPERATIVA**: Mejora de CCC artificial por caída de stock ({inventory_drop:.1%}). Riesgo inminente de rotura de stock (Stockouts).")
+        
+    # R3: DPO Extendido (Riesgo Proveedores)
+    # Si el DPO sube más de un 20% vs la media histórica.
+    if current['dpo'] > (avg['dpo'] * 1.20):
+        alerts.append(f"🟡 **ALERTA PROVEEDORES**: DPO extendido (+{current['dpo'] - avg['dpo']:.1f} días vs media). Riesgo de tensión en cadena de suministro.")
+        
+    # R4: Cálculo de Impacto en Valoración (Cash Unlocked)
+    # Cuánta caja se ha liberado (o consumido) al cambiar el CCC respecto al mes anterior
+    # Fórmula: (CCC_anterior - CCC_actual) * Ventas_diarias
+    ventas_diarias = current['ventas_netas'] / 30
+    cash_unlocked = delta_ccc * ventas_diarias
+    
+    return alerts, cash_unlocked
+
+# -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO MEJORADA
 # -----------------------------------------------------------------------------
 st.title("📊 Working Capital: Torre de Control Integral")
@@ -243,6 +283,135 @@ kpi_card_explained(c1, "Ciclo de Caja (CCC)", last_month['ccc'], avg_12m['ccc'],
 kpi_card_explained(c2, "DSO (Cobro)", last_month['dso'], avg_12m['dso'], True, "👇 Si baja, cobras antes.")
 kpi_card_explained(c3, "DIO (Inventario)", last_month['dio'], avg_12m['dio'], True, "👇 Si baja, rotas más.")
 kpi_card_explained(c4, "DPO (Pago)", last_month['dpo'], avg_12m['dpo'], False, "👆 Si sube, te financias.")
+
+st.markdown("---")
+
+# ==============================================================================
+# BLOQUE 1.5: DIAGNÓSTICO IA AVANZADO (NUEVO)
+# ==============================================================================
+# Selector de industria para contexto
+industry = st.sidebar.selectbox("Sector / Industria", ["manufacturing", "retail", "services", "tech"], index=0)
+
+alerts, cash_impact = analyze_ccc_health(df, industry_type=industry)
+
+st.subheader("🤖 Diagnóstico Inteligente de Salud Financiera")
+
+# Mostrar impacto económico
+col_ia1, col_ia2 = st.columns([1, 2])
+
+with col_ia1:
+    if cash_impact > 0:
+        st.success(f"💰 **Caja Liberada (Mes vs Mes):** +${cash_impact:,.0f}")
+        st.caption("La mejora en el ciclo ha generado liquidez extra.")
+    elif cash_impact < 0:
+        st.warning(f"💸 **Caja Atrapada (Mes vs Mes):** -${abs(cash_impact):,.0f}")
+        st.caption("El deterioro del ciclo ha consumido caja operativa.")
+    else:
+        st.info("⚖️ **Caja Neutra:** El ciclo se mantiene estable.")
+
+with col_ia2:
+    if alerts:
+        for alert in alerts:
+            st.markdown(alert)
+    else:
+        st.success("✅ **Sistema Saludable**: No se detectan anomalías críticas en la estructura del capital de trabajo.")
+
+st.markdown("---")
+
+# ==============================================================================
+# BLOQUE 1.8: VISUALIZACIÓN TÚNEL DE EFECTIVO (NUEVO)
+# ==============================================================================
+st.subheader("🕵️ Visualización del Túnel de Efectivo (Gantt)")
+st.caption("Entiende visualmente tu brecha de financiación. La distancia entre el fin de los pagos (Rojo) y el fin de los cobros (Verde) es dinero que debes poner de tu bolsillo.")
+
+# Preparación de Datos para Gráfico
+# Usamos last_month que ya está definido arriba
+dso_val = last_month['dso']
+dio_val = last_month['dio']
+dpo_val = last_month['dpo']
+ccc_val = last_month['ccc']
+
+fig_tunnel = go.Figure()
+
+# --- CICLO OPERATIVO (FILA 1) ---
+# 1. Inventario (Azul) - Empieza en 0
+fig_tunnel.add_trace(go.Bar(
+    y=['Ciclo Operativo'],
+    x=[dio_val],
+    name='Inventario (DIO)',
+    orientation='h',
+    marker=dict(color='#3498DB', line=dict(width=1)),
+    hovertemplate="Inventario: %{x:.0f} días<extra></extra>"
+))
+
+# 2. Clientes (Verde) - Empieza después de Inventario 'base=dio_val'
+# Nota: Plotly con barmode='stack' los apila automáticamente si están en la misma Y.
+fig_tunnel.add_trace(go.Bar(
+    y=['Ciclo Operativo'],
+    x=[dso_val],
+    name='Clientes (DSO)',
+    orientation='h',
+    marker=dict(color='#2ECC71', line=dict(width=1)),
+    hovertemplate="Cobro: %{x:.0f} días<extra></extra>"
+))
+
+# --- FINANCIACIÓN (FILA 2) ---
+# 3. Proveedores (Rojo) - Empieza en 0
+fig_tunnel.add_trace(go.Bar(
+    y=['Financiación'],
+    x=[dpo_val],
+    name='Proveedores (DPO)',
+    orientation='h',
+    marker=dict(color='#E74C3C', line=dict(width=1)),
+    hovertemplate="Pago: %{x:.0f} días<extra></extra>"
+))
+
+# 4. Brecha (GAP) - Para rellenar visualmente la diferencia
+# El GAP es la diferencia entre (DIO+DSO) y DPO.
+total_operating_cycle = dio_val + dso_val
+gap_size = total_operating_cycle - dpo_val
+
+if gap_size > 0:
+    fig_tunnel.add_trace(go.Bar(
+        y=['Financiación'],
+        x=[gap_size],
+        base=dpo_val, # Empieza donde acaba DPO
+        name='NECESIDAD DE CAJA (CCC)',
+        orientation='h',
+        marker=dict(color='rgba(255, 165, 0, 0.4)', line=dict(color='#E67E22', width=2, dash='dot')), # Naranja semitransparente
+        text=f"GAP: {gap_size:.0f} días",
+        textposition='auto',
+        hovertemplate="Dinero parado: %{x:.0f} días<extra></extra>"
+    ))
+elif gap_size < 0:
+    # Caso de Cash Negativo (Financiación > Operativo)
+    # Mostramos el excedente en la fila Operativo
+    surplus = abs(gap_size)
+    fig_tunnel.add_trace(go.Bar(
+        y=['Ciclo Operativo'],
+        x=[surplus],
+        base=total_operating_cycle,
+        name='EXCEDENTE DE CAJA',
+        orientation='h',
+        marker=dict(color='rgba(46, 204, 113, 0.4)', line=dict(color='#27AE60', width=2, dash='dot')), 
+        text=f"Generando Caja: {surplus:.0f} días",
+        textposition='auto',
+        hovertemplate="Excedente: %{x:.0f} días<extra></extra>"
+    ))
+
+
+fig_tunnel.update_layout(
+    title_text="Esquema Visual del Ciclo",
+    barmode='stack', # Apilamos
+    xaxis_title="Días Temporales (Desde compra MP)",
+    yaxis=dict(autorange="reversed"), # Operativo arriba
+    height=350,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    plot_bgcolor='rgba(0,0,0,0)',
+    xaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
+)
+
+st.plotly_chart(fig_tunnel, use_container_width=True)
 
 st.markdown("---")
 
