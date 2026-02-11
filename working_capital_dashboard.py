@@ -362,9 +362,10 @@ fig_tunnel.add_trace(go.Bar(
     x=[dpo_val],
     name='Proveedores (DPO)',
     orientation='h',
-    marker=dict(color='#E74C3C', line=dict(width=1)),
+    marker=dict(color='#E74C3C', line=dict(width=1)), # Rojo sólido
     hovertemplate="Pago: %{x:.0f} días<extra></extra>"
 ))
+
 
 # 4. Brecha (GAP) - Para rellenar visualmente la diferencia
 # El GAP es la diferencia entre (DIO+DSO) y DPO.
@@ -375,10 +376,10 @@ if gap_size > 0:
     fig_tunnel.add_trace(go.Bar(
         y=['Financiación'],
         x=[gap_size],
-        base=dpo_val, # Empieza donde acaba DPO
+        base=[dpo_val], # Empieza donde acaba DPO
         name='NECESIDAD DE CAJA (CCC)',
         orientation='h',
-        marker=dict(color='rgba(255, 165, 0, 0.4)', line=dict(color='#E67E22', width=2, dash='dot')), # Naranja semitransparente
+        marker=dict(color='rgba(255, 165, 0, 0.4)', line=dict(color='#E67E22', width=2)), # Naranja semitransparente
         text=f"GAP: {gap_size:.0f} días",
         textposition='auto',
         hovertemplate="Dinero parado: %{x:.0f} días<extra></extra>"
@@ -393,7 +394,7 @@ elif gap_size < 0:
         base=total_operating_cycle,
         name='EXCEDENTE DE CAJA',
         orientation='h',
-        marker=dict(color='rgba(46, 204, 113, 0.4)', line=dict(color='#27AE60', width=2, dash='dot')), 
+        marker=dict(color='rgba(46, 204, 113, 0.4)', line=dict(color='#27AE60', width=2)), 
         text=f"Generando Caja: {surplus:.0f} días",
         textposition='auto',
         hovertemplate="Excedente: %{x:.0f} días<extra></extra>"
